@@ -1,7 +1,7 @@
 package elastico
 
 import (
-"github.com/dedis/student_17_byzcoin/byzcoin/blockchain"
+"github.com/dedis/cothority/byzcoin/blockchain"
 "gopkg.in/dedis/onet.v1"
 )
 
@@ -77,22 +77,13 @@ type Committee struct{
 	ID string
 }
 
-type groupBlockChan struct {
+type finalBlockChan struct {
 	*onet.TreeNode
-	GroupBlock
+	FinalBlock
 }
 
-type GroupBlock struct {
+type FinalBlock struct {
 	*blockchain.TrBlock
-}
-
-type blockChan struct{
-	*onet.TreeNode
-	Block
-}
-
-type Block struct{
-	HeaderHash string
 }
 
 type randomStringChan struct{
@@ -102,5 +93,14 @@ type randomStringChan struct{
 
 type RandomString struct{
 	Random string
+}
+
+type ResendID struct {
+	Resend bool
+}
+
+type resendIDChan struct{
+	*onet.TreeNode
+	ResendID
 }
 
