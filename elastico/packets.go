@@ -6,6 +6,7 @@ import (
 )
 
 const (
+
 	preprepare = iota
 	prepare
 	commit
@@ -52,14 +53,19 @@ type finishChan struct {
 	Finish
 }
 
-type groupCommitteeChan struct {
+type groupCommitteeIDChan struct {
 	*onet.TreeNode
 	Committee
 }
 
+type directoryCommittee struct{
+	id string
+	nodeIndex int
+}
+
 type directoryCommitteeChan struct{
 	*onet.TreeNode
-	Committee
+	directoryCommittee
 }
 
 type finalCommitteeChan struct{
@@ -67,9 +73,14 @@ type finalCommitteeChan struct{
 	Committee
 }
 
+type id struct {
+	id string
+	nodeIndex int
+}
+
 type idChan struct{
 	*onet.TreeNode
-	Committee
+	id
 }
 type Committee struct{
 	Indices []int
@@ -102,5 +113,14 @@ type ResendID struct {
 type resendIDChan struct{
 	*onet.TreeNode
 	ResendID
+}
+
+type startProtocolChan struct{
+	*onet.TreeNode
+	startProtocol
+}
+
+type startProtocol struct{
+	start bool
 }
 
