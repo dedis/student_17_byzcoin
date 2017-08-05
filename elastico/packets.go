@@ -53,39 +53,28 @@ type finishChan struct {
 	Finish
 }
 
-type groupCommitteeIDChan struct {
-	*onet.TreeNode
-	Committee
-}
 
-type directoryCommittee struct{
-	id string
-	nodeIndex int
-}
 
-type directoryCommitteeChan struct{
-	*onet.TreeNode
-	directoryCommittee
-}
 
-type finalCommitteeChan struct{
-	*onet.TreeNode
-	Committee
-}
 
-type id struct {
-	id string
-	nodeIndex int
+type ID struct {
+	CommitteeHash string
+	NodeIndex     int
 }
 
 type idChan struct{
 	*onet.TreeNode
-	id
+	ID
 }
-type Committee struct{
-	Indices []int
-	Index int
-	ID string
+
+type committeeMembersChan struct{
+	*onet.TreeNode
+	CommitteeMembers
+}
+
+type CommitteeMembers struct{
+	coMembers []ID
+	nodeMemberHash string
 }
 
 type finalBlockChan struct {
@@ -106,21 +95,12 @@ type RandomString struct{
 	Random string
 }
 
-type ResendID struct {
-	Resend bool
-}
-
-type resendIDChan struct{
-	*onet.TreeNode
-	ResendID
-}
-
 type startProtocolChan struct{
 	*onet.TreeNode
-	startProtocol
+	StartProtocol
 }
 
-type startProtocol struct{
-	start bool
+type StartProtocol struct{
+	Start bool
 }
 
