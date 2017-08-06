@@ -57,14 +57,14 @@ type finishChan struct {
 
 
 
-type ID struct {
-	CommitteeHash string
+type MemberID struct {
+	HashHexString string
 	NodeIndex     int
 }
 
-type idChan struct{
+type memberChan struct{
 	*onet.TreeNode
-	ID
+	MemberID
 }
 
 type committeeMembersChan struct{
@@ -73,8 +73,8 @@ type committeeMembersChan struct{
 }
 
 type CommitteeMembers struct{
-	coMembers []ID
-	nodeMemberHash string
+	CoMembers      map[string]int
+	NodeMemberHash string
 }
 
 type finalBlockChan struct {

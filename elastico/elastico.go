@@ -27,34 +27,30 @@ const (
 
 
 type Elastico struct{
-	// the node we represent in
+	// the node we represent
 	*onet.TreeNodeInstance
 	// nodes in the tree
 	nodeList []*onet.TreeNode
-	// our index in the tree
+	// node index in the tree
 	index int
-	// our state in the protocol
+	// node state in the protocol
 	state int
 
-	// all the POWs that this node has produced
-	members map[string]*IDsPoW
+	// all the members that this node has produced
+	members map[string]*Member
 	idm     sync.Mutex
-	// the nodes in the directory committee
+	// the members in the directory committee
 	directoryCommittee map[string]int
 	dc sync.Mutex
-	// the nodes in the final committee
-	finalCommittee map[string]int
-	fc	sync.Mutex
-
 
 	hashChan chan big.Int
 
 	// prtocol start channel
 	startProtocolChan chan startProtocolChan
 	// channel to receive other nodes PoWs
-	idChan chan idChan
-	 //channel to receive group committee members from directory
-	committeeMembersChanChan chan committeeMembersChan
+	memberChan chan memberChan
+	//channel to receive committee members from directory members
+	committeeMembersChan chan committeeMembersChan
 	// channel to receive final committee members from directory
 	//finalCommitteeChan chan finalCommitteeChan
 	// channel to receive the block in the group
@@ -72,30 +68,33 @@ type Elastico struct{
 
 
 
-type IDsPoW struct {
-	// the ID that specifies pow's group
-	id string
+type Member struct {
+	//id hash of this member
+	idHashString string
 
-	// the members with the same committee with this ID
-	groupCommitteeID map[string]int
+	// members in this member's committee
+	committeeMembers map[string]int
 
-	// block that the group must agree on
-	groupBlock blockchain.TrBlock
+	// block that the committee wants to reach consensus
+	committeeBlock blockchain.TrBlock
 
-	// if the ID is final
+	// if member is in a final committee
 	isFinal bool
-	// the random string to generate
+	// the random string that a final committee member generates
 	randomString string
-	// the random set to offer to next round
+	// the random string set to pass to next round
 	randomSet []string
 	rs sync.Mutex
 
-	// if the node is directory
+	// if member is in a directory committee
 	isDirecotory bool
-	// map of group number to group member indices
-	directory map[int]([]ID)
+	// map of committee number to committee member id
+	directory map[int](map[string]int)
 
-	// the pbft of this ID
+
+
+
+	// the pbft of this MemberID
 	tempPrepareMsg []Prepare
 	tpm sync.Mutex
 	tempCommitMsg  []Commit
@@ -134,10 +133,10 @@ func NewElastico(n *onet.TreeNodeInstance) (*Elastico, error){
 	if err := n.RegisterChannel(&els.startProtocolChan); err != nil {
 		return els, err
 	}
-	if err := n.RegisterChannel(&els.idChan); err != nil {
+	if err := n.RegisterChannel(&els.memberChan); err != nil {
 		return els, err
 	}
-	if err := n.RegisterChannel(&els.committeeMembersChanChan); err != nil{
+	if err := n.RegisterChannel(&els.committeeMembersChan); err != nil{
 		return els, err
 	}
 	//if err := n.RegisterChannel(&els.finalBlockChan); err != nil{
@@ -151,10 +150,11 @@ func NewElastico(n *onet.TreeNodeInstance) (*Elastico, error){
 
 
 func (els *Elastico) Start() error{
-	// broadcast to all nodes that they should start the protocol
+	// broadcast to all nodes so that they start the protocol
 	els.broadcast(func (tn *onet.TreeNode){
 		if err := els.SendTo(tn, &StartProtocol{true}); err != nil {
-			panic(fmt.Sprintf("The protocol can't start"))
+			log.Error(els.Name(), "can't start protocol", tn.Name(), err)
+			return err
 		}
 	})
 	return nil
@@ -166,8 +166,8 @@ func (els *Elastico) Dispatch() error{
 		select {
 			case  <- els.startProtocolChan :
 				els.handleStartProtocol()
-			case msg := <- els.idChan :
-				els.HandleNewID(msg.ID)
+			case msg := <- els.memberChan:
+				els.handleNewMember(msg.MemberID)
 		}
 	}
 }
@@ -179,65 +179,90 @@ func (els *Elastico) handleStartProtocol() error {
 	for {
 	var hashInt big.Int
 		if els.state == stateMining {
-			h := sha256.New()
-			h.Write([]byte(string(els.index + rand.Int())))
-			hashByte := h.Sum(nil)
+			hashByte := els.computePoW()
 			hashInt.SetBytes(hashByte)
 			// FIXME make target comparable to big.Int
-			if hashInt.Cmp(target) < 0 {
-				hashHexString := hex.EncodeToString(hashByte)
-				els.dc.Lock()
-				if len(els.directoryCommittee) < c {
-					els.directoryCommittee[hashHexString] = els.index
-					els.members[hashHexString] = els.makeDirectoryID(hashHexString)
-					els.broadcast(func (tn *onet.TreeNode){
-						if err := els.SendTo(tn, &ID{hashHexString, els.index}); err != nil{
-							log.Error(els.Name(), "can't broadcast new ID", tn.Name(), err)
-							return err
-						}
-					})
-				} else{
-					els.members[hashHexString] = els.makeID(hashHexString)
-					els.broadcastDirectory(func (tn *onet.TreeNode){
-						if err := els.SendTo(tn, &ID{hashHexString, els.index}); err!= nil{
-							log.Error(els.Name(), "can't send new ID to directory")
-							return err
-						}
-					})
-				}
-				els.dc.Unlock()
+			if err := els.checkPoW(hashInt); err != nil {
+				return err
 			}
 		}
 	}
+	return nil
+}
+
+func (els *Elastico) checkPoW(hashInt big.Int) error {
+	if hashInt.Cmp(target) < 0 {
+		hashHexString := hex.EncodeToString(hashInt.Bytes())
+		els.dc.Lock()
+		if len(els.directoryCommittee) < c {
+			els.makeDirectoryMember(hashHexString)
+			els.broadcast(func(tn *onet.TreeNode) {
+				if err := els.SendTo(tn, &MemberID{hashHexString, els.index}); err != nil {
+					log.Error(els.Name(), "can't broadcast new member", tn.Name(), err)
+					return err
+				}
+			})
+		} else {
+			els.makeMember(hashHexString)
+			els.broadcastToDirectory(func(tn *onet.TreeNode) {
+				if err := els.SendTo(tn, &MemberID{hashHexString, els.index}); err != nil {
+					log.Error(els.Name(), "can't multicast new member to directory", tn.Name(), err)
+					return err
+				}
+			})
+		}
+		els.dc.Unlock()
+	}
+	return nil
 }
 
 
-func (els *Elastico) HandleNewID(newID ID) {
+func (els *Elastico) computePoW() ([]byte) {
+	h := sha256.New()
+	h.Write([]byte(string(els.index + rand.Int())))
+	hashByte := h.Sum(nil)
+	return hashByte
+}
+
+
+func (els *Elastico) handleNewMember (newMember MemberID) error {
+	els.dc.Lock()
 	if len(els.directoryCommittee) < c {
-		if newID.NodeIndex != els.index {
-			els.directoryCommittee[newID.CommitteeHash] = newID.NodeIndex
-			els.members[newID.CommitteeHash] = els.makeDirectoryID(newID.CommitteeHash)
+		if newMember.NodeIndex != els.index {
+			els.makeDirectoryMember(newMember.HashHexString)
 		}
 	}
+	els.dc.Unlock()
 	for hashString , index := range els.directoryCommittee {
 		if els.index == index {
-			els.runAsDirectory(hashString, newID)
+			return els.runAsDirectory(hashString, newMember)
 		}
 	}
+	return nil
 }
 
 
-func (els *Elastico) runAsDirectory(hashString string, newID ID) {
-	hashByte, err := hex.DecodeString(newID.CommitteeHash)
+func (els *Elastico) runAsDirectory (hashString string, newMember MemberID) error {
+
+	hashByte, err := hex.DecodeString(newMember.HashHexString)
 	if err != nil {
-		log.Error("mis-formatted id")
+		log.Error("mis-formatted hash string")
+		return err
 	}
 	dirMember := els.members[hashString]
 	committeeNo := getCommitteeNo(hashByte)
 
-	if len(dirMember.directory) < c {
-		dirMember.directory[committeeNo] = append(dirMember.directory[committeeNo], newID)
+	if len(dirMember.directory[committeeNo]) < c {
+		//FIXME add some validation before accepting the id
+		committeeMap := dirMember.directory[committeeNo]
+		committeeMap[newMember.HashHexString] = newMember.NodeIndex
 	}
+
+	return els.multicast(dirMember)
+}
+
+
+func (els *Elastico) multicast(dirMember *Member) error {
 
 	completeCommittee := 0
 	for i := 0 ; i < comcnt ; i++ {
@@ -245,24 +270,22 @@ func (els *Elastico) runAsDirectory(hashString string, newID ID) {
 			completeCommittee++
 		}
 	}
+
 	if completeCommittee == comcnt {
-		// maybe we should add error here
-		for i, _:= range dirMember.directory{
-			for _, send := range dirMember.directory[i]{
-				if err := els.SendTo(send,
+		for committee, _:= range dirMember.directory{
+			for member, node := range dirMember.directory[committee]{
+				if err := els.SendTo(els.nodeList[node],
 					&CommitteeMembers{
-						dirMember.directory[i],
-						send.CommitteeHash}); err != nil{
-					log.Error(els.Name(), "directory failed to send committee members", err)
+						dirMember.directory[committee],
+						member}); err != nil{
+					log.Error(els.Name(), "directory failed to member committee members", err)
+					return err
 				}
 			}
 		}
 	}
-}
 
-
-func (dirMember *IDsPoW)multicastCommitee() {
-
+	return nil
 }
 
 func getCommitteeNo(bytes []byte) int {
@@ -277,20 +300,22 @@ func getCommitteeNo(bytes []byte) int {
 }
 
 
-func (els *Elastico) makeID(id string) *IDsPoW {
-	pow := new(IDsPoW)
-	pow.id = id
-	pow.state = preprepare
-	return pow
+func (els *Elastico) makeMember(hashHexString string){
+	member := new(Member)
+	member.idHashString = hashHexString
+	member.state = preprepare
+	els.members[hashHexString] = member
+	return member
 }
 
 
-func (els *Elastico) makeDirectoryID(id string) *IDsPoW{
-	pow := new(IDsPoW)
-	pow.id = id
-	pow.isDirecotory = true
-	pow.state = preprepare
-	return pow
+func (els *Elastico) makeDirectoryMember(hashHexString string){
+	member := new(Member)
+	member.idHashString = hashHexString
+	member.isDirecotory = true
+	member.state = preprepare
+	els.directoryCommittee[hashHexString] = els.index
+	els.members[hashHexString] = member
 }
 
 
@@ -303,7 +328,7 @@ func (els *Elastico) broadcast(sendCB func(node *onet.TreeNode)){
 	}
 }
 
-func (els *Elastico) broadcastDirectory(sendCB func(node *onet.TreeNode)) {
+func (els *Elastico) broadcastToDirectory(sendCB func(node *onet.TreeNode)) {
 	for _, node := range els.directoryCommittee{
 		go sendCB(node)
 	}
