@@ -6,11 +6,12 @@ import (
 )
 
 const (
-
-	preprepare = iota
-	prepare
-	commit
-	finish
+	pbftStateNotReady = iota
+	pbftStateBroadcast
+	pbftPreprepare
+	pbftPrepare
+	pbftCommit
+	pbftFinish
 )
 
 type PrePrepare struct {
@@ -57,14 +58,14 @@ type finishChan struct {
 
 
 
-type MemberID struct {
+type NewMemberID struct {
 	HashHexString string
 	NodeIndex     int
 }
 
-type memberChan struct{
+type newMemberIDChan struct{
 	*onet.TreeNode
-	MemberID
+	NewMemberID
 }
 
 type committeeMembersChan struct{
@@ -73,8 +74,18 @@ type committeeMembersChan struct{
 }
 
 type CommitteeMembers struct{
-	CoMembers      map[string]int
-	NodeMemberHash string
+	CoMembers  map[string]int
+	DestMember string
+}
+
+type committeeMembersListChan struct{
+	*onet.TreeNode
+	CommitteeMembersList
+}
+
+type CommitteeMembersList struct {
+	CoMembers map[string]int
+	DestMember string
 }
 
 type finalBlockChan struct {
