@@ -7,8 +7,6 @@ import (
 
 const (
 	pbftStateNotReady = iota
-	pbftStateBroadcast
-	pbftStatePreprepare
 	pbftStatePrepare
 	pbftStateCommit
 	pbftStateFinish
@@ -38,6 +36,7 @@ type prepareChan struct {
 // Commit is the commit packet in the protocol
 type Commit struct {
 	HeaderHash string
+	DestMember string
 }
 
 type commitChan struct {

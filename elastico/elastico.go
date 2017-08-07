@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"encoding/hex"
 	"sort"
+	"math"
 )
 
 const (
@@ -36,7 +37,8 @@ type Elastico struct{
 	index int
 	// node state in the protocol
 	state int
-
+	// the global threshold of nodes needed computed from committee members count
+	threshold int
 	// all the members that this node has produced
 	members map[string]*Member
 	idm     sync.Mutex
@@ -83,11 +85,8 @@ type Member struct {
 	randomSet []string
 	rs sync.Mutex
 
-	// if member is in a directory committee
-	isDirecotory bool
 	// map of committee number to committee member id
 	directory map[int](map[string]int)
-
 
 
 	// directory messages that this member has received
@@ -107,14 +106,14 @@ type Member struct {
 	// number of commit messages received
 	commitMsgCount int
 	cmc            sync.Mutex
-	// threshold which is 2.0/3.0 in pbft
-	threshold int
+	// thresholdPBFT which is 2.0/3.0 in pbft
+	thresholdPBFT int
 	// state that the member is in
 	state int
 
 	prePrepareChan chan bool
 	prepareChan    chan *Prepare
-	commitChan     chan commitChan
+	commitChan     chan *Commit
 	finishChan     chan finishChan
 }
 
@@ -126,6 +125,7 @@ func NewElastico(n *onet.TreeNodeInstance) (*Elastico, error){
 	els.nodeList = n.Tree().List()
 	els.index = -1
 	els.committeeMembersNo = 0
+	els.threshold = int (math.Ceil(float64(c) * 2.0 / 3.0))
 	for i, tn := range els.nodeList{
 		if tn.ID.Equal(n.TreeNode().ID){
 			els.index = i
@@ -148,9 +148,12 @@ func NewElastico(n *onet.TreeNodeInstance) (*Elastico, error){
 	if err := n.RegisterChannel(&els.prePrepareChan); err != nil{
 		return els,err
 	}
-	//if err := n.RegisterChannel(&els.randomStringChan); err != nil{
-	//	return els, err
-	//}
+	if err := n.RegisterChannel(&els.prepareChan); err != nil{
+		return els, err
+	}
+	if err := n.RegisterChannel(&els.commitChan); err != nil {
+		return els,err
+	}
 	return els, nil
 }
 
@@ -173,11 +176,16 @@ func (els *Elastico) Dispatch() error{
 			case  <- els.startProtocolChan :
 				els.handleStartProtocol()
 			case msg := <- els.newMemberIDChan:
-				els.handleNewMember(msg.NewMemberID)
+				els.handleNewMember(&msg.NewMemberID)
 			case msg := <- els.committeeMembersChan :
-				els.handleCommitteeMember(msg.CommitteeMembers)
+				els.handleCommitteeMember(&msg.CommitteeMembers)
 			case msg := <- els.prePrepareChan :
-				els.handlePrePrepare(msg.PrePrepare)
+				els.handlePrePrepare(&msg.PrePrepare)
+			case msg := <- els.prepareChan :
+				els.handlePrepare(&msg.Prepare)
+			case msg := <- els.commitChan:
+				els.handleCommit(&msg.Commit)
+
 		}
 	}
 }
@@ -207,7 +215,8 @@ func (els *Elastico) checkPoW(hashInt big.Int) error {
 		hashHexString := hex.EncodeToString(hashInt.Bytes())
 		els.dc.Lock()
 		if len(els.directoryCommittee) < c {
-			els.makeDirectoryMember(hashHexString)
+			els.makeMember(hashHexString)
+			els.directoryCommittee[hashHexString] = els.index
 			els.broadcast(func(tn *onet.TreeNode) {
 				if err := els.SendTo(tn, &NewMemberID{hashHexString, els.index}); err != nil {
 					log.Error(els.Name(), "can't broadcast new member", tn.Name(), err)
@@ -241,7 +250,8 @@ func (els *Elastico) handleNewMember (newMember NewMemberID) error {
 	els.dc.Lock()
 	if len(els.directoryCommittee) < c {
 		if newMember.NodeIndex != els.index {
-			els.makeDirectoryMember(newMember.HashHexString)
+			els.makeMember(newMember.HashHexString)
+			els.directoryCommittee[newMember.HashHexString] = newMember.NodeIndex
 		}
 	}
 	els.dc.Unlock()
@@ -311,23 +321,25 @@ func (els *Elastico) handleCommitteeMember(committee CommitteeMembers) error {
 		}
 		memberToUpdate.committeeMembers[coMember] = node
 	}
-	return els.checkPbftState(memberToUpdate)
+	go els.checkPbftState(memberToUpdate)
+	return nil
 }
 
 
 func (els *Elastico) checkPbftState(member *Member) error {
 	member.directoryMsgCnt++
-	if member.directoryMsgCnt > member.threshold{
+	if member.directoryMsgCnt >= member.thresholdPBFT {
 		if els.state == stateMining {
 			els.state = stateConsensus
 		}
-		member.state = pbftStatePreprepare
-		member.prePrepareChan <- true
 		leader := selectLeader(member.committeeMembers)
 		if leader == member.idHashString {
 			member.isLeaderchan <- true
 		}
 		close(member.isLeaderchan)
+		member.thresholdPBFT = int(math.Ceil(float64(len(member.committeeMembers))*2.0/3.0))
+		member.state = pbftStatePrepare
+		member.prePrepareChan <- true
 	}
 	return nil
 }
@@ -348,23 +360,79 @@ func (els *Elastico) startPBFT(member *Member) {
 
 func (els *Elastico) handlePrePrepare(prePrepare PrePrepare) error {
 	member := els.members[prePrepare.DestMember]
-	go func() {
-		if member.state == pbftStateNotReady {
-			<- member.prePrepareChan
-			member.state = pbftStatePrepare
+	go els.handlePrepreparePBFT(member, prePrepare)
+	return nil
+}
+
+
+
+func (els *Elastico) handlePrepreparePBFT(member *Member, prePrepare PrePrepare) {
+	<-member.prePrepareChan
+	member.state = pbftStatePrepare
+	member.committeeBlock = prePrepare.TrBlock
+	for coMember, node := range member.committeeMembers {
+		if err := els.SendTo(els.nodeList[node], &Prepare{member.committeeBlock.HeaderHash, coMember}); err != nil {
+			log.Error(els.Name(), "can't send prepare message", els.nodeList[node].Name(), err)
+		}
+	}
+	for _, prepare := range member.tempPrepareMsg {
+		member.prepareChan <- prepare
+	}
+	member.tempPrepareMsg = nil
+}
+
+
+func (els *Elastico) handlePrepare(prepare *Prepare) error {
+	member := els.members[prepare.DestMember]
+	if member.state == pbftStateNotReady {
+		member.tempPrepareMsg = append(member.tempPrepareMsg, prepare)
+		return nil
+	} else if member.state == pbftStatePrepare {
+		member.prepareChan <- prepare
+	}
+	return nil
+}
+
+
+func (els *Elastico) handlePreparePBFT(member *Member) {
+	for {
+		<- member.prepareChan
+		member.prepMsgCount++
+		if member.prepMsgCount >= member.thresholdPBFT {
+			member.state = pbftStateCommit
 			for coMember, node := range member.committeeMembers {
-				if err := els.SendTo(els.nodeList[node], &Prepare{prePrepare.TrBlock.HeaderHash, coMember}); err != nil{
+				if err := els.SendTo(els.nodeList[node], &Commit{member.committeeBlock.HeaderHash, coMember}); err != nil {
 					log.Error(els.Name(), "can't send prepare message", els.nodeList[node].Name(), err)
 				}
 			}
-			for _, msg := range member.tempPrepareMsg {
-				member.prepareChan <- msg
+			for _, commit := range member.tempCommitMsg {
+				member.commitChan <- commit
 			}
-			member.tempPrepareMsg = nil
+			member.commitChan = nil
+			return
 		}
+	}
+}
 
-	}()
+func (els *Elastico) handleCommit(commit *Commit) error{
+	member := els.members[commit.DestMember]
+	if member.state != pbftStateCommit {
+		member.tempCommitMsg = append(member.tempCommitMsg, commit)
+		return nil
+	}
+	member.commitChan <- commit
 	return nil
+}
+
+
+func (els *Elastico) handleCommitPBFT(member *Member) {
+	for {
+		<- member.commitChan
+		member.commitMsgCount++
+		if member.commitMsgCount >= member.thresholdPBFT {
+			member.state = pbftStateFinish
+		}
+	}
 }
 
 
@@ -390,23 +458,15 @@ func getCommitteeNo(bytes []byte) int {
 }
 
 
-func (els *Elastico) makeMember(hashHexString string){
+func (els *Elastico) makeMember(hashHexString string) Member{
 	member := new(Member)
 	member.idHashString = hashHexString
 	member.state = pbftStateNotReady
 	go els.startPBFT(member)
+	go els.handlePreparePBFT(member)
+	go els.handleCommitPBFT(member)
 	els.members[hashHexString] = member
 	return member
-}
-
-
-func (els *Elastico) makeDirectoryMember(hashHexString string){
-	member := new(Member)
-	member.idHashString = hashHexString
-	member.isDirecotory = true
-	member.state = pbftStateNotReady
-	els.directoryCommittee[hashHexString] = els.index
-	els.members[hashHexString] = member
 }
 
 
