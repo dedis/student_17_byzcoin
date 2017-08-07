@@ -8,15 +8,15 @@ import (
 const (
 	pbftStateNotReady = iota
 	pbftStateBroadcast
-	pbftPreprepare
-	pbftPrepare
-	pbftCommit
-	pbftFinish
+	pbftStatePreprepare
+	pbftStatePrepare
+	pbftStateCommit
+	pbftStateFinish
 )
 
 type PrePrepare struct {
 	*blockchain.TrBlock
-	HeaderHash string
+	DestMember string
 }
 
 type prePrepareChan struct {
@@ -27,6 +27,7 @@ type prePrepareChan struct {
 // Prepare is the prepare packet
 type Prepare struct {
 	HeaderHash string
+	DestMember string
 }
 
 type prepareChan struct {
