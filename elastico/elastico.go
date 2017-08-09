@@ -63,6 +63,8 @@ type Elastico struct{
 	prePrepareChan chan prePrepareChan
 	prepareChan    chan prepareChan
 	commitChan     chan commitChan
+	prepareFinalChan chan prepareFinalChan
+	commitFinalChan chan commitFinalChan
 	finishChan     chan finishChan
 
 
@@ -100,17 +102,20 @@ type Member struct {
 
 
 	// the pbft of this NewMemberID
-	tempPrePrepareMsg []*PrePrepare
 	tempPrepareMsg []*Prepare
+	tempPrepareFinalMsg[] *PrepareFinal
 	tempCommitMsg  []*Commit
+	tempCommitFinalMsg []*CommitFinal
 	tempBlockToFinalCommittee []*BlockToFinalCommittee
 	// if the is the leader in the committee
 	isLeaderchan chan bool
 	// number of prepare messages received
 	prepMsgCount int
+	prepFinalMsgCount int
 	pmc          sync.Mutex
 	// number of commit messages received
 	commitMsgCount int
+	commitFinalMsgCount int
 	cmc            sync.Mutex
 	// thresholdPBFT which is 2.0/3.0 in pbft
 	thresholdPBFT int
@@ -126,6 +131,8 @@ type Member struct {
 	prepareChan    chan *Prepare
 	commitChan     chan *Commit
 	finalBlockChan chan *BlockToFinalCommittee
+	prepareFinalChan chan *PrepareFinal
+	commitFinalChan chan *CommitFinal
 }
 
 
@@ -165,6 +172,9 @@ func NewElastico(n *onet.TreeNodeInstance) (*Elastico, error){
 	if err := n.RegisterChannel(&els.commitChan); err != nil {
 		return els,err
 	}
+	if err := n.RegisterChannel(&els.prepareFinalChan); err != nil{
+		return els, err
+	}
 	return els, nil
 }
 
@@ -198,9 +208,14 @@ func (els *Elastico) Dispatch() error{
 				els.handleCommit(&msg.Commit)
 			case msg := <- els.blockToFinalCommitteeChan :
 				els.handleBlockToFinalCommittee(&msg.BlockToFinalCommittee)
+			case msg := <- els.prepareFinalChan :
+				els.handlePrepareFinal(&msg.PrepareFinal)
+			case msg := <- els.commitFinalChan :
+				els.handleCommitFinal(&msg.CommitFinal)
 		}
 	}
 }
+
 
 func (els *Elastico) handleStartProtocol() error {
 	els.state = stateMining
@@ -487,7 +502,7 @@ func (els *Elastico) broadcastToFinal (member *Member) {
 
 func (els *Elastico) handleBlockToFinalCommittee(block *BlockToFinalCommittee) {
 	member := els.members[block.DestMember]
-	if member.state != pbftStateFinish {
+	if member.state != pbftStateFinal {
 		member.tempBlockToFinalCommittee = append(member.tempBlockToFinalCommittee, block)
 		return
 	}
@@ -518,13 +533,18 @@ func (els *Elastico) finalPBFT(member *Member) {
 
 func (els *Elastico) handlePrePrepareFinal(prePrepareFinal *PrePrepareFinal){
 	member := els.members[prePrepareFinal.DestMember]
-	// FIXME make the channel have a buffer
+	// FIXME make the channels have a buffer
+	// FIXME this is really important and big
 	member.prePrepareFinalChan <- prePrepareFinal
 }
 
 func (els *Elastico) handlePrePrepareFinalPBFT(member *Member) {
 	block := <- member.prePrepareFinalChan
 	member.state = pbftStatePrepareFinal
+	go els.handlePrePrepareFinalPBFT(member)
+	for _, prepare := range member.tempPrepareFinalMsg {
+		member.prepareFinalChan <- prepare
+	}
 	for coMember, node := range member.committeeMembers{
 		if err := els.SendTo(els.nodeList[node],
 			&PrepareFinal{block.HeaderHash, coMember}); err != nil{
@@ -532,10 +552,58 @@ func (els *Elastico) handlePrePrepareFinalPBFT(member *Member) {
 		}
 	}
 }
-// FIXME make channel for prepare final
-func (els *Elastico) handlePrepareFinalPBFT(member *Member) {
 
+
+func (els *Elastico) handlePrepareFinal(prepareFinal PrepareFinal) {
+	member := els.members[prepareFinal.DestMember]
+	if member.state != pbftStatePrepareFinal {
+		member.tempPrepareFinalMsg = append(member.tempPrepareFinalMsg, &prepareFinal)
+		return
+	}
+	<- member.prepareFinalChan
 }
+
+func (els *Elastico) handlePrepareFinalPBFT(member *Member){
+	for {
+		block := <- member.prepareFinalChan
+		member.prepFinalMsgCount++
+		if member.prepFinalMsgCount >= member.thresholdPBFT {
+			member.state = pbftStateCommitFinal
+			go els.handleCommitFinalPBFT(member)
+			for _, commit := range member.tempCommitFinalMsg {
+				member.commitFinalChan <- commit
+			}
+			for coMember, node := range member.committeeMembers {
+				if err := els.SendTo(els.nodeList[node],
+					&CommitFinal{block.HedearHash, coMember}); err != nil{
+					log.Error(els.Name(), "can't send to member in final commit", els.nodeList[node], err)
+				}
+			}
+			return
+		}
+	}
+}
+
+func (els *Elastico) handleCommitFinal(commitFinal *CommitFinal) {
+	member := els.members[commitFinal.DestMember]
+	if member.state != pbftStateCommitFinal {
+		member.tempCommitFinalMsg = append(member.tempCommitFinalMsg, commitFinal)
+	}
+	member.commitFinalChan <- commitFinal
+}
+
+func (els *Elastico) handleCommitFinalPBFT(member *Member) {
+	for {
+		<- member.commitFinalChan
+		member.commitFinalMsgCount++
+		if member.commitFinalMsgCount >= member.thresholdPBFT {
+			member.state = pbftStateFinish
+
+		}
+	}
+}
+
+
 
 func selectLeader(committee map[string]int) string {
 	var keys []string

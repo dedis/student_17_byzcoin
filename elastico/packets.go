@@ -9,16 +9,20 @@ const (
 	pbftStateNotReady = iota
 	pbftStatePrepare
 	pbftStateCommit
-	pbftStateFinish
 	pbftStateFinal
 	pbftStatePrepareFinal
 	pbftStateCommitFinal
-	pbftStateFinishFinal
+	pbftStateFinish
 )
 
 type PrePrepare struct {
 	*blockchain.TrBlock
 	DestMember string
+}
+
+type prePrepareChan struct {
+	*onet.TreeNode
+	PrePrepare
 }
 
 type PrePrepareFinal struct{
@@ -29,11 +33,6 @@ type PrePrepareFinal struct{
 type prePrepareFinal struct{
 	*onet.TreeNode
 	PrePrepareFinal
-}
-
-type prePrepareChan struct {
-	*onet.TreeNode
-	PrePrepare
 }
 
 // Prepare is the prepare packet
@@ -47,6 +46,17 @@ type prepareChan struct {
 	Prepare
 }
 
+type PrepareFinal struct {
+	HedearHash string
+	DestMember string
+}
+
+
+type prepareFinalChan struct {
+	*onet.TreeNode
+	PrepareFinal
+}
+
 // Commit is the commit packet in the protocol
 type Commit struct {
 	HeaderHash string
@@ -56,6 +66,16 @@ type Commit struct {
 type commitChan struct {
 	*onet.TreeNode
 	Commit
+}
+
+type CommitFinal struct {
+	HeaderHash string
+	DestMember string
+}
+
+type commitFinalChan struct {
+	*onet.TreeNode
+	CommitFinal
 }
 
 // Finish is just to tell the others node that the protocol is finished
@@ -134,17 +154,8 @@ type BlockToFinalCommittee struct {
 }
 
 type blockToFinalCommitteeChan struct {
-	*onet.Tree
+	*onet.TreeNode
 	BlockToFinalCommittee
 }
 
-type prepareFinalChan struct {
-	*onet.TreeNode
-	PrepareFinal
-}
-
-type PrepareFinal struct {
-	HedearHash string
-	DestMember string
-}
 
