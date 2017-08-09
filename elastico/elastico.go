@@ -65,7 +65,8 @@ type Elastico struct{
 	commitChan     chan commitChan
 	prepareFinalChan chan prepareFinalChan
 	commitFinalChan chan commitFinalChan
-	finishChan     chan finishChan
+	finishChan     chan bool
+	finishMsgCnt int
 
 
 
@@ -149,6 +150,7 @@ func NewElastico(n *onet.TreeNodeInstance) (*Elastico, error){
 			els.index = i
 		}
 	}
+	go els.checkFinish()
 	if els.index == -1 {
 		panic(fmt.Sprint("Could not find ourselves %+v in the list of nodes %+v", n, els.nodeList))
 	}
@@ -478,8 +480,7 @@ func (els *Elastico) handleCommitPBFT(member *Member) {
 					member.finalBlockChan <- block
 				}
 			} else {
-				member.state = pbftStateFinish
-				go els.handlePrePrepareFinalPBFT(member)
+				go els.finalPBFT(member)
 			}
 			els.broadcastToFinal(member)
 		}
@@ -496,6 +497,8 @@ func (els *Elastico) broadcastToFinal (member *Member) {
 				log.Error(els.Name(), "can't send block to final committee", els.nodeList[node], err)
 			}
 		}
+		member.state = pbftStateFinish
+		els.finishChan <- true
 	}
 }
 
@@ -541,7 +544,7 @@ func (els *Elastico) handlePrePrepareFinal(prePrepareFinal *PrePrepareFinal){
 func (els *Elastico) handlePrePrepareFinalPBFT(member *Member) {
 	block := <- member.prePrepareFinalChan
 	member.state = pbftStatePrepareFinal
-	go els.handlePrePrepareFinalPBFT(member)
+	go els.handlePrepareFinalPBFT(member)
 	for _, prepare := range member.tempPrepareFinalMsg {
 		member.prepareFinalChan <- prepare
 	}
@@ -552,7 +555,6 @@ func (els *Elastico) handlePrePrepareFinalPBFT(member *Member) {
 		}
 	}
 }
-
 
 func (els *Elastico) handlePrepareFinal(prepareFinal PrepareFinal) {
 	member := els.members[prepareFinal.DestMember]
@@ -598,12 +600,30 @@ func (els *Elastico) handleCommitFinalPBFT(member *Member) {
 		member.commitFinalMsgCount++
 		if member.commitFinalMsgCount >= member.thresholdPBFT {
 			member.state = pbftStateFinish
-
+			els.finishChan <- true
 		}
 	}
 }
 
 
+func (els *Elastico) checkFinish() {
+	for {
+		<- els.finishChan
+		els.finishMsgCnt++
+		var pointlessMembers int = 0
+		for _, member := range els.members {
+			if member.state == pbftStateNotReady {
+				pointlessMembers++
+			}
+		}
+		nodeMembersCnt := len(els.members) - pointlessMembers
+		if els.finishMsgCnt == nodeMembersCnt {
+			els.Done()
+			return
+		}
+	}
+
+}
 
 func selectLeader(committee map[string]int) string {
 	var keys []string
