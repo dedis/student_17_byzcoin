@@ -10,11 +10,25 @@ const (
 	pbftStatePrepare
 	pbftStateCommit
 	pbftStateFinish
+	pbftStateFinal
+	pbftStatePrepareFinal
+	pbftStateCommitFinal
+	pbftStateFinishFinal
 )
 
 type PrePrepare struct {
 	*blockchain.TrBlock
 	DestMember string
+}
+
+type PrePrepareFinal struct{
+	HeaderHash string
+	DestMember string
+}
+
+type prePrepareFinal struct{
+	*onet.TreeNode
+	PrePrepareFinal
 }
 
 type prePrepareChan struct {
@@ -54,10 +68,6 @@ type finishChan struct {
 	Finish
 }
 
-
-
-
-
 type NewMemberID struct {
 	HashHexString string
 	NodeIndex     int
@@ -75,6 +85,7 @@ type committeeMembersChan struct{
 
 type CommitteeMembers struct{
 	CoMembers  map[string]int
+	FinMembers map[string]int
 	DestMember string
 }
 
@@ -113,5 +124,27 @@ type startProtocolChan struct{
 
 type StartProtocol struct{
 	Start bool
+}
+
+
+type BlockToFinalCommittee struct {
+	HeaderHash string
+	DestMember string
+	committeeNo int
+}
+
+type blockToFinalCommitteeChan struct {
+	*onet.Tree
+	BlockToFinalCommittee
+}
+
+type prepareFinalChan struct {
+	*onet.TreeNode
+	PrepareFinal
+}
+
+type PrepareFinal struct {
+	HedearHash string
+	DestMember string
 }
 
