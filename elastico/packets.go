@@ -7,13 +7,44 @@ import (
 
 const (
 	pbftStateNotReady = iota
+	pbftStatePrePrepare
 	pbftStatePrepare
 	pbftStateCommit
-	pbftStateFinal
+	pbftStatePrePrepareFinal
 	pbftStatePrepareFinal
 	pbftStateCommitFinal
 	pbftStateFinish
 )
+
+type startProtocolChan struct{
+	*onet.TreeNode
+	StartProtocol
+}
+
+type StartProtocol struct{
+	Start bool
+}
+
+type NewMember struct {
+	HashHexString string
+	NodeIndex     int
+}
+
+type newMemberChan struct{
+	*onet.TreeNode
+	NewMember
+}
+
+type CommitteeMembers struct{
+	CoMembers  map[string]int
+	FinMembers map[string]int
+	DestMember string
+}
+
+type committeeMembersChan struct{
+	*onet.TreeNode
+	CommitteeMembers
+}
 
 type PrePrepare struct {
 	*blockchain.TrBlock
@@ -30,12 +61,11 @@ type PrePrepareFinal struct{
 	DestMember string
 }
 
-type prePrepareFinal struct{
+type prePrepareFinalChan struct{
 	*onet.TreeNode
 	PrePrepareFinal
 }
 
-// Prepare is the prepare packet
 type Prepare struct {
 	HeaderHash string
 	DestMember string
@@ -51,13 +81,11 @@ type PrepareFinal struct {
 	DestMember string
 }
 
-
 type prepareFinalChan struct {
 	*onet.TreeNode
 	PrepareFinal
 }
 
-// Commit is the commit packet in the protocol
 type Commit struct {
 	HeaderHash string
 	DestMember string
@@ -78,7 +106,6 @@ type commitFinalChan struct {
 	CommitFinal
 }
 
-// Finish is just to tell the others node that the protocol is finished
 type Finish struct {
 	Done string
 }
@@ -87,65 +114,6 @@ type finishChan struct {
 	*onet.TreeNode
 	Finish
 }
-
-type NewMemberID struct {
-	HashHexString string
-	NodeIndex     int
-}
-
-type newMemberIDChan struct{
-	*onet.TreeNode
-	NewMemberID
-}
-
-type committeeMembersChan struct{
-	*onet.TreeNode
-	CommitteeMembers
-}
-
-type CommitteeMembers struct{
-	CoMembers  map[string]int
-	FinMembers map[string]int
-	DestMember string
-}
-
-type committeeMembersListChan struct{
-	*onet.TreeNode
-	CommitteeMembersList
-}
-
-type CommitteeMembersList struct {
-	CoMembers map[string]int
-	DestMember string
-}
-
-type finalBlockChan struct {
-	*onet.TreeNode
-	FinalBlock
-}
-
-type FinalBlock struct {
-	*blockchain.TrBlock
-}
-
-type randomStringChan struct{
-	*onet.TreeNode
-	RandomString
-}
-
-type RandomString struct{
-	Random string
-}
-
-type startProtocolChan struct{
-	*onet.TreeNode
-	StartProtocol
-}
-
-type StartProtocol struct{
-	Start bool
-}
-
 
 type BlockToFinalCommittee struct {
 	HeaderHash string
