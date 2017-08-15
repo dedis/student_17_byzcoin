@@ -27,7 +27,8 @@ type Elastico struct{
 	nodeList []*onet.TreeNode
 	index int
 	state int
-	memberHashHexString chan string
+	RootNodeBlocks []*blockchain.TrBlock
+	block *blockchain.TrBlock
 
 	// the target for the PoW
 	target big.Int
@@ -48,8 +49,10 @@ type Elastico struct{
 	dc sync.Mutex
 
 
-	finishMsgCnt int
-	fmc sync.Mutex
+	finishMsgCnt     int
+	rootFinishMsgCnt int
+	OnDoneCB         func()
+	fmc              sync.Mutex
 
 
 	hashChan chan big.Int
@@ -68,6 +71,7 @@ type Elastico struct{
 	prePrepareFinalChan chan prePrepareFinalChan
 	prepareFinalChan    chan prepareFinalChan
 	commitFinalChan     chan commitFinalChan
+	finishChan 			chan FinishChan
 }
 
 
@@ -139,7 +143,7 @@ func NewElastico(n *onet.TreeNodeInstance) (*Elastico, error){
 	if els.index == -1 {
 		panic(fmt.Sprint("Could not find ourselves %+v in the list of nodes %+v", n, els.nodeList))
 	}
-	go els.checkFinish()
+
 	// register the channels so the protocol calls appropriate functions upon receiving messages
 	if err := n.RegisterChannel(&els.startProtocolChan); err != nil {
 		return els, err
@@ -168,6 +172,9 @@ func NewElastico(n *onet.TreeNodeInstance) (*Elastico, error){
 	if err := n.RegisterChannel(&els.commitFinalChan); err != nil{
 		return els, err
 	}
+	if err := n.RegisterChannel(&els.finishChan); err != nil{
+		return els, err
+	}
 	return els, nil
 }
 
@@ -175,7 +182,10 @@ func NewElastico(n *onet.TreeNodeInstance) (*Elastico, error){
 func (els *Elastico) Start() error {
 	// broadcast to all nodes so that they start the protocol
 	els.broadcast(func (tn *onet.TreeNode){
-		if err := els.SendTo(tn, &StartProtocol{true}); err != nil {
+		if err := els.SendTo(tn,
+			&StartProtocol{els.RootNodeBlocks[rand.Intn(els.committeeCount)],
+				els.committeeCount,
+				els.committeeSize}); err != nil {
 			log.Error(els.Name(), "can't start protocol", tn.Name(), err)
 			return err
 		}
@@ -187,8 +197,8 @@ func (els *Elastico) Start() error {
 func (els *Elastico) Dispatch() error{
 	for{
 		select {
-			case  <- els.startProtocolChan :
-				els.handleStartProtocol()
+			case  msg := <- els.startProtocolChan :
+				els.handleStartProtocol(&msg.StartProtocol)
 			case msg := <- els.newMemberChan:
 				els.handleNewMember(&msg.NewMember)
 			case msg := <- els.committeeMembersChan :
@@ -207,11 +217,19 @@ func (els *Elastico) Dispatch() error{
 				els.handlePrepareFinal(&msg.PrepareFinal)
 			case msg := <- els.commitFinalChan :
 				els.handleCommitFinal(&msg.CommitFinal)
+			case <- els.finishChan :
+				els.rootFinishMsgCnt++
+				if els.rootFinishMsgCnt == els.Tree().Size(){
+					els.OnDoneCB()
+				}
 		}
 	}
 }
 
-func (els *Elastico) handleStartProtocol() error {
+func (els *Elastico) handleStartProtocol(start *StartProtocol) error {
+	els.committeeCount = start.committeeCount
+	els.committeeSize = start.committeeSize
+	els.block = start.block
 	els.state = stateMining
 	go els.findPoW()
 	return nil
@@ -408,9 +426,9 @@ func selectLeader(committee map[string]int) string {
 
 // here leader starts the inter-committee PBFT
 func (els *Elastico) startPBFT(member *Member) {
-	for comMember, node := range member.committeeMembers{
+	for coMember, node := range member.committeeMembers{
 		if err := els.SendTo(els.nodeList[node],
-			&PrePrepare{member.committeeBlock, comMember}); err != nil{
+			&PrePrepare{member.committeeBlock, coMember}); err != nil{
 			log.Error(els.Name(), "could not start PBFT", els.nodeList[node], err)
 			return
 		}
@@ -648,6 +666,7 @@ func (els *Elastico) checkFinish() {
 		}
 		nodeMembersCnt := len(els.members) - pointlessMembers
 		if els.finishMsgCnt == nodeMembersCnt {
+			els.SendTo(els.Tree().Root, &Finish{})
 			els.Done()
 			return
 		}
@@ -660,6 +679,7 @@ func (els *Elastico) addMember (hashHexString string) *Member{
 	member := new(Member)
 	member.hashHexString = hashHexString
 	member.state = pbftStateNotReady
+	member.committeeBlock = els.block
 	els.members[hashHexString] = member
 	return member
 }
@@ -673,6 +693,6 @@ func (els *Elastico) broadcast(sendCB func(node *onet.TreeNode)){
 
 func (els *Elastico) broadcastToDirectory(sendCB func(node *onet.TreeNode)) {
 	for _, node := range els.directoryCommittee{
-		go sendCB(node)
+		go sendCB(els.nodeList[node])
 	}
 }

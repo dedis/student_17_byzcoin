@@ -3,6 +3,7 @@ package elastico
 import (
 "github.com/dedis/cothority/byzcoin/blockchain"
 "gopkg.in/dedis/onet.v1"
+	"gopkg.in/dedis/onet.v1/network"
 )
 
 const (
@@ -16,13 +17,33 @@ const (
 	pbftStateFinish
 )
 
+func init() {
+	for _, i := range []interface{}{
+		StartProtocol{},
+		NewMember{},
+		CommitteeMembers{},
+		PrePrepare{},
+		PrePrepareFinal{},
+		Prepare{},
+		PrepareFinal{},
+		Commit{},
+		CommitFinal{},
+		Finish{},
+		BlockToFinalCommittee{},
+	} {
+		network.RegisterMessage(i)
+	}
+}
+
 type startProtocolChan struct{
 	*onet.TreeNode
 	StartProtocol
 }
 
 type StartProtocol struct{
-	Start bool
+	block *blockchain.TrBlock
+	committeeCount int
+	committeeSize int
 }
 
 type NewMember struct {
@@ -106,11 +127,9 @@ type commitFinalChan struct {
 	CommitFinal
 }
 
-type Finish struct {
-	Done string
-}
+type Finish struct {}
 
-type finishChan struct {
+type FinishChan struct {
 	*onet.TreeNode
 	Finish
 }
