@@ -3,8 +3,12 @@ package elastico
 import (
 "github.com/dedis/cothority/byzcoin/blockchain"
 "gopkg.in/dedis/onet.v1"
+	"gopkg.in/dedis/onet.v1/network"
 )
 
+func init() {
+	network.RegisterMessage(BlockToFinalCommittee{})
+}
 const (
 	pbftStateNotReady = iota
 	pbftStatePrePrepare
@@ -125,5 +129,3 @@ type blockToFinalCommitteeChan struct {
 	*onet.TreeNode
 	BlockToFinalCommittee
 }
-
-
