@@ -257,6 +257,7 @@ func (els *Elastico) findPoW() {
 
 func (els *Elastico) handlePoW (hashHexString string) error {
 	els.dc.Lock()
+	defer els.dc.Unlock()
 	if len(els.directoryCommittee) < els.committeeSize {
 		member := els.addMember(hashHexString)
 		els.directoryCommittee[hashHexString] = els.index
@@ -278,7 +279,6 @@ func (els *Elastico) handlePoW (hashHexString string) error {
 			}
 		})
 	}
-	els.dc.Unlock()
 	return nil
 }
 
@@ -289,6 +289,8 @@ func (els *Elastico) handleNewMember (newMember *NewMember) error {
 	// then add it to node's directory committee list.
 	// else if it is from this node and node's directory committee list is not complete,
 	// then this has been added before in handlePoW() method.
+	els.dc.Lock()
+	els.dc.Unlock()
 	if len(els.directoryCommittee) < els.committeeSize {
 		if els.index != newMember.NodeIndex {
 			els.directoryCommittee[newMember.HashHexString] = newMember.NodeIndex
@@ -372,21 +374,23 @@ func (els *Elastico) multicast(directoryMember *Member) error {
 
 
 func (els *Elastico) handleCommitteeMembers(committee CommitteeMembers) error {
-	memberToUpdate := els.members[committee.DestMember]
-	for coMember, node := range committee.CoMembers {
-		if memberToUpdate.hashHexString == coMember{
-			continue
+	if els.state == stateMining {
+		memberToUpdate := els.members[committee.DestMember]
+		for coMember, node := range committee.CoMembers {
+			if memberToUpdate.hashHexString == coMember{
+				continue
+			}
+			memberToUpdate.committeeMembers[coMember] = node
 		}
-		memberToUpdate.committeeMembers[coMember] = node
-	}
-	for finMember, node := range committee.FinMembers {
-		if memberToUpdate.hashHexString == finMember {
-			memberToUpdate.isFinal = true
-			continue
+		for finMember, node := range committee.FinMembers {
+			if memberToUpdate.hashHexString == finMember {
+				memberToUpdate.isFinal = true
+				continue
+			}
+			memberToUpdate.finalCommitteeMembers[finMember] = node
 		}
-		memberToUpdate.finalCommitteeMembers[finMember] = node
+		return els.checkForPBFT(memberToUpdate)
 	}
-	go els.checkForPBFT(memberToUpdate)
 	return nil
 }
 
