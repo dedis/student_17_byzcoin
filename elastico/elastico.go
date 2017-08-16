@@ -302,10 +302,13 @@ func (els *Elastico) handleNewMember (newMember *NewMember) error {
 	for hashHexString, nodeIndex := range els.directoryCommittee {
 		if nodeIndex == els.index {
 			directoryMember := els.members[hashHexString]
-			go func() {directoryMember.memberToDirectoryChan <- newMember}()
+			go func(directoryMember *Member) {directoryMember.memberToDirectoryChan <- newMember}(directoryMember)
 			// directory committee nodes also has to know their committee
 			for hashHexString, nodeIndex := range els.directoryCommittee {
-				go func() {directoryMember.memberToDirectoryChan <- &NewMember{hashHexString , nodeIndex}}()
+				go func(directoryMember *Member, hashHexString string, nodeIndex int) {
+					directoryMember.memberToDirectoryChan <- &NewMember{
+						hashHexString , nodeIndex}
+				}(directoryMember, hashHexString, nodeIndex)
 			}
 		}
 	}
