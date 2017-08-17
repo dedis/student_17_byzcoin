@@ -60,6 +60,7 @@ type CommitteeMembers struct{
 	CoMembers  map[string]int
 	FinMembers map[string]int
 	DestMember string
+	CommitteeNo int
 }
 
 type committeeMembersChan struct{

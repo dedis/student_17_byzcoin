@@ -109,6 +109,8 @@ func (e *ElasticoSimulation) Run (config *onet.SimulationConfig) error {
 		}
 		els := p.(*elastico.Elastico)
 		els.OnDoneCB  = onDoneCB
+		els.CommitteeCount = e.CommitteeCount
+		els.CommitteeSize = e.CommitteeSize
 		for _, trBlock := range rootNodeBlocks {
 			els.RootNodeBlocks = append(els.RootNodeBlocks, trBlock)
 		}
