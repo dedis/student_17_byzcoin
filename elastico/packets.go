@@ -1,14 +1,30 @@
 package elastico
 
 import (
-"github.com/dedis/cothority/byzcoin/blockchain"
-"gopkg.in/dedis/onet.v1"
+	"github.com/dedis/cothority/byzcoin/blockchain"
+	"gopkg.in/dedis/onet.v1"
 	"gopkg.in/dedis/onet.v1/network"
 )
 
+
 func init() {
-	network.RegisterMessage(BlockToFinalCommittee{})
+	for _, i := range []interface{}{
+		StartProtocol{},
+		NewMember{},
+		CommitteeMembers{},
+		PrePrepare{},
+		PrePrepareFinal{},
+		Prepare{},
+		PrepareFinal{},
+		Commit{},
+		CommitFinal{},
+		Finish{},
+		BlockToFinalCommittee{},
+	} {
+		network.RegisterMessage(i)
+	}
 }
+
 const (
 	pbftStateNotReady = iota
 	pbftStatePrePrepare

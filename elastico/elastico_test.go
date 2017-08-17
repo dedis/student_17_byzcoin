@@ -37,7 +37,9 @@ func TestElastico(t *testing.T) {
 		t.Errorf("20 Seconds and No responds, protocol failed")
 	}
 	*/
-	time.Sleep(10*time.Second)
+	time.Sleep(7*time.Second)
+	root.PrintStatus()
+
 	t.Errorf("Fake error")
 
 	localTest.CloseAll();
