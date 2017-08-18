@@ -4,6 +4,7 @@ import (
 "github.com/dedis/cothority/byzcoin/blockchain"
 "gopkg.in/dedis/onet.v1"
 	"gopkg.in/dedis/onet.v1/network"
+	//"math/big"
 )
 
 const (
@@ -41,9 +42,11 @@ type startProtocolChan struct{
 }
 
 type StartProtocol struct{
-	block *blockchain.TrBlock
-	committeeCount int
-	committeeSize int
+	Block          *blockchain.TrBlock
+	CommitteeCount int
+	CommitteeSize  int
+	FinalCommittee int
+	Target         int
 }
 
 type NewMember struct {

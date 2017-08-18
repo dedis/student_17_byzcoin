@@ -1,14 +1,15 @@
-package simulation
+package main
 
 import (
 	"gopkg.in/dedis/onet.v1"
 	"github.com/dedis/student_17_byzcoin/elastico"
 	"github.com/BurntSushi/toml"
-	"github.com/dedis/student_17_byzcoin/byzcoin/blockchain"
+	"github.com/dedis/cothority/byzcoin/blockchain"
 	"gopkg.in/dedis/onet.v1/log"
 	"github.com/dedis/cothority/byzcoin/blockchain/blkparser"
 	"github.com/dedis/cothority/messaging"
 	"github.com/dedis/onet/simul/monitor"
+	//"math/big"
 )
 
 
@@ -33,6 +34,8 @@ type ElasticoSimulation struct {
 	CommitteeSize int
 	// block size is the number of transactions in one block
 	BlockSize int
+	// target of PoW
+	Target int
 }
 
 func NewElasticoSimulation(config string) (onet.Simulation, error){
@@ -82,7 +85,7 @@ func (e *ElasticoSimulation) Run (config *onet.SimulationConfig) error {
 	if err != nil {
 		log.Error(err)
 	}
-	proto := pi.(*messaging.Broadcast)
+	proto, _ := pi.(*messaging.Broadcast)
 	// channel to notify we are done
 	broadDone := make(chan bool)
 	proto.RegisterOnDone(func() {
@@ -111,6 +114,7 @@ func (e *ElasticoSimulation) Run (config *onet.SimulationConfig) error {
 		els.OnDoneCB  = onDoneCB
 		els.CommitteeCount = e.CommitteeCount
 		els.CommitteeSize = e.CommitteeSize
+		els.TargetBit = e.Target
 		for _, trBlock := range rootNodeBlocks {
 			els.RootNodeBlocks = append(els.RootNodeBlocks, trBlock)
 		}
@@ -119,8 +123,8 @@ func (e *ElasticoSimulation) Run (config *onet.SimulationConfig) error {
 			log.Error("Couldn't start elastico")
 			return err
 		}
-		r.Record()
 		<- doneChan
+		r.Record()
 		log.Lvl1("finished round", round)
 	}
 	return nil

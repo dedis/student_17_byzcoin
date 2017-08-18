@@ -1,0 +1,7 @@
+Servers = 5
+Simulation = "Elastico"
+Rounds = 5
+BF = 5
+
+Hosts, CommitteeCount, CommitteeSize, BlockSize, Target
+10, 2, 5, 5000, 2 
