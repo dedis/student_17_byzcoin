@@ -12,6 +12,7 @@ const (
 	pbftStatePrePrepare
 	pbftStatePrepare
 	pbftStateCommit
+	pbftStateTransit
 	pbftStatePrePrepareFinal
 	pbftStatePrepareFinal
 	pbftStateCommitFinal
@@ -138,10 +139,17 @@ type FinishChan struct {
 	Finish
 }
 
+type FinishRoot struct{}
+
+type finishRootChan struct {
+	*onet.TreeNode
+	FinishRoot
+}
+
 type BlockToFinalCommittee struct {
-	HeaderHash string
-	DestMember string
-	committeeNo int
+	HeaderHash  string
+	DestMember  string
+	CommitteeNo int
 }
 
 type blockToFinalCommitteeChan struct {

@@ -76,6 +76,7 @@ type Elastico struct{
 	prepareFinalChan    chan prepareFinalChan
 	commitFinalChan     chan commitFinalChan
 	finishChan 			chan FinishChan
+	finishRootChan 		chan finishRootChan
 }
 
 
@@ -88,8 +89,10 @@ type Member struct {
 	committeeNo int
 	// members in this member's committee
 	committeeMembers map[string]int
+	committeeMembersCnt map[string]int
 	// members in the final committee
 	finalCommitteeMembers map[string]int
+	finalCommitteeMembersCnt map[string]int
 	// Block that the committee wants to reach consensus
 	committeeBlock *blockchain.TrBlock
 	// if member is in a final committee
@@ -123,11 +126,17 @@ type Member struct {
 	// map of committee to Block that they reached consensus
 	finalConsensus map[int]string
 	prePrepareChan chan *PrePrepare
+	startPrePrepareChan chan bool
 	prePrepareFinalChan chan *PrePrepareFinal
+	startPrePrepareFinalChan chan bool
 	prepareChan    chan *Prepare
+	startPrepareChan chan bool
 	prepareFinalChan chan *PrepareFinal
+	startPrepareFinalChan chan bool
 	commitChan     chan *Commit
+	startCommitChan chan bool
 	commitFinalChan chan *CommitFinal
+	startCommitFinalChan chan bool
 	finalBlockChan chan *BlockToFinalCommittee
 }
 
@@ -138,7 +147,6 @@ func NewElastico(n *onet.TreeNodeInstance) (*Elastico, error){
 	els.TreeNodeInstance = n
 	els.nodeList = n.Tree().List()
 	els.index = -1
-	els.threshold = int (math.Ceil(float64(els.CommitteeSize) * 2.0 / 3.0))
 	els.members = make(map[string]*Member)
 	els.directoryCommittee = make(map[string]int)
 	for i, tn := range els.nodeList{
@@ -184,8 +192,11 @@ func NewElastico(n *onet.TreeNodeInstance) (*Elastico, error){
 	if err := n.RegisterChannel(&els.blockToFinalCommitteeChan); err != nil{
 		return els, err
 	}
-
+	if err := n.RegisterChannel(&els.finishRootChan); err != nil{
+		return els, err
+	}
 	return els, nil
+
 }
 
 
@@ -193,14 +204,15 @@ func (els *Elastico) Start() error {
 	// FIXME print stuff
 	log.Print("root has started protocol")
 	// broadcast to all nodes so that they start the protocol
-	sp := &StartProtocol{els.RootNodeBlocks[rand.Intn(els.CommitteeCount)],
-						 els.CommitteeCount,
-						 els.CommitteeSize,
-						 rand.Intn(els.CommitteeCount),
-						 els.TargetBit}
-	els.broadcast(func (tn *onet.TreeNode){
-		els.SendTo(tn, sp)
-	})
+	finalCommittee := rand.Intn(els.CommitteeCount)
+	for index, node := range els.nodeList {
+		sp := &StartProtocol{els.RootNodeBlocks[index],
+							 els.CommitteeCount,
+							 els.CommitteeSize,
+							 finalCommittee,
+							 els.TargetBit}
+		els.SendTo(node, sp)
+	}
 	return nil
 }
 
@@ -229,22 +241,23 @@ func (els *Elastico) Dispatch() error{
 			case msg := <- els.commitFinalChan :
 				els.handleCommitFinal(&msg.CommitFinal)
 			case <- els.finishChan :
+				els.handleFinish()
+			case <- els.finishRootChan :
 				els.rootFinishMsgCnt++
-				if els.rootFinishMsgCnt == els.Tree().Size(){
+				if els.rootFinishMsgCnt == len(els.nodeList){
 					els.OnDoneCB()
-					return nil
+					els.Done()
 				}
 		}
 	}
 }
 
-
 func (els *Elastico) handleStartProtocol(start *StartProtocol) error {
 	els.CommitteeCount = start.CommitteeCount
-	log.Print(start.CommitteeCount)
 	els.CommitteeSize = start.CommitteeSize
 	els.committeeBits = int (math.Log2(float64(els.CommitteeCount)))
 	els.finalCommittee = start.FinalCommittee
+	els.threshold = int (math.Ceil(float64(els.CommitteeSize)/2.0))
 	els.block = start.Block
 	els.state = stateMining
 	els.Target = *big.NewInt(0).Exp(big.NewInt(2), big.NewInt(256 - int64(start.Target)), big.NewInt(0))
@@ -280,7 +293,7 @@ func (els *Elastico) findPoW() {
 func (els *Elastico) handlePoW (hashHexString string) error {
 	els.dc.Lock()
 	defer els.dc.Unlock()
-	log.Print("node", els.index, "has found", hashHexString)
+	//log.Print("node", els.index, "has found", hashHexString)
 	if len(els.directoryCommittee) < els.CommitteeSize {
 		member := els.addMember(hashHexString)
 		els.directoryCommittee[hashHexString] = els.index
@@ -326,7 +339,7 @@ func (els *Elastico) handleNewMember (newMember *NewMember) error {
 		if nodeIndex == els.index {
 			directoryMember := els.members[hashHexString]
 			go func(directoryMember *Member) {directoryMember.memberToDirectoryChan <- newMember}(directoryMember)
-			// directory committee nodes also has to know their committee
+			// directory committee nodes also have to know their committee
 			for hashHexString, nodeIndex := range els.directoryCommittee {
 				go func(directoryMember *Member, hashHexString string, nodeIndex int) {
 					directoryMember.memberToDirectoryChan <- &NewMember{
@@ -340,7 +353,8 @@ func (els *Elastico) handleNewMember (newMember *NewMember) error {
 
 
 func (els *Elastico) runAsDirectory (directoryMember *Member) {
-	log.Print("member", directoryMember.hashHexString, "is directory on node", els.index )
+	//FIXME print stuff
+	log.Print("member", directoryMember.hashHexString[0:8], "is directory on node", els.index )
 	for {
 		newMember := <- directoryMember.memberToDirectoryChan
 		hashByte, _ := hex.DecodeString(newMember.HashHexString)
@@ -384,7 +398,8 @@ func (els *Elastico) getCommitteeNo(bytes []byte) int {
 
 
 func (els *Elastico) multicast(directoryMember *Member) error {
-	log.Print("directory member", directoryMember.hashHexString, "multicast on node", els.index)
+	//FIXME print stuff
+	log.Print("directory member", directoryMember.hashHexString[0:8], "multicast on node", els.index)
 	finalCommittee := els.finalCommittee
 	for committee, _:= range directoryMember.directory{
 		for member, node := range directoryMember.directory[committee]{
@@ -418,6 +433,7 @@ func (els *Elastico) checkForPBFT(memberToUpdate *Member, committee *CommitteeMe
 				continue
 			}
 			memberToUpdate.committeeMembers[coMember] = node
+			memberToUpdate.committeeMembersCnt[coMember]++
 		}
 		for finMember, node := range committee.FinMembers {
 			if memberToUpdate.hashHexString == finMember {
@@ -425,27 +441,40 @@ func (els *Elastico) checkForPBFT(memberToUpdate *Member, committee *CommitteeMe
 				continue
 			}
 			memberToUpdate.finalCommitteeMembers[finMember] = node
+			memberToUpdate.finalCommitteeMembersCnt[finMember]++
 		}
 		memberToUpdate.directoryMsgCnt++
 		if memberToUpdate.directoryMsgCnt >= els.threshold {
 			//FIXME print stuff
-			log.Print("member", memberToUpdate.hashHexString,
+			log.Print("member", memberToUpdate.hashHexString[0:8],
 				"on node", els.index, "has received comembers with",
 				memberToUpdate.directoryMsgCnt, "directory messages")
 			memberToUpdate.directoryMsgCnt = 0
-			els.state = stateConsensus
-			leader := selectLeader(memberToUpdate.committeeMembers)
-			if leader == memberToUpdate.hashHexString {
-				memberToUpdate.isLeader = true
-				go els.startPBFT(memberToUpdate)
+			for coMember := range memberToUpdate.committeeMembers {
+				if memberToUpdate.committeeMembersCnt[coMember] < els.threshold {
+					delete(memberToUpdate.committeeMembers, coMember)
+				}
 			}
-			if memberToUpdate.isLeader {
+			for finMember := range memberToUpdate.finalCommitteeMembers {
+				if memberToUpdate.finalCommitteeMembersCnt[finMember] < els.threshold {
+					delete(memberToUpdate.finalCommitteeMembers, finMember)
+				}
+			}
+			//els.state = stateConsensus
+			leader := selectLeader(memberToUpdate.committeeMembers)
+			if memberToUpdate.hashHexString < leader {
+				leader = memberToUpdate.hashHexString
+			}
+			if memberToUpdate.hashHexString == leader {
+				memberToUpdate.isLeader = true
 				memberToUpdate.thresholdPBFT = int(math.Ceil(float64(len(memberToUpdate.committeeMembers))*2.0/3.0)) - 1
-				memberToUpdate.state = pbftStatePrepare
+				go els.startPBFT(memberToUpdate)
+				go els.handlePreparePBFT(memberToUpdate)
+				<- memberToUpdate.startPrepareChan
 			} else {
 				memberToUpdate.thresholdPBFT = int(math.Ceil(float64(len(memberToUpdate.committeeMembers))*2.0/3.0))
-				memberToUpdate.state = pbftStatePrePrepare
 				go els.handlePrePreparePBFT(memberToUpdate)
+				<- memberToUpdate.startPrePrepareChan
 			}
 		}
 		return nil
@@ -466,8 +495,9 @@ func selectLeader(committee map[string]int) string {
 // here leader starts the inter-committee PBFT
 func (els *Elastico) startPBFT(member *Member) {
 	// FIXME print stuff
-	log.Print("member", member.hashHexString , "of committee", member.committeeNo,
+	log.Print("member", member.hashHexString[0:8] , "of committee", member.committeeNo,
 		"on node", els.index, "has started pbft")
+	log.Print(member.committeeMembers, "for member", member.hashHexString[0:8], "on node", els.index)
 	for coMember, node := range member.committeeMembers{
 		if err := els.SendTo(els.nodeList[node],
 			&PrePrepare{member.committeeBlock, coMember}); err != nil{
@@ -480,6 +510,7 @@ func (els *Elastico) startPBFT(member *Member) {
 
 func (els *Elastico) handlePrePrepare(prePrepare *PrePrepare) error {
 	member := els.members[prePrepare.DestMember]
+	log.Print(member.committeeMembers, "for member", member.hashHexString[0:8], "on node", els.index)
 	if member.state != pbftStatePrePrepare {
 		// FIXME make this channel with buffer
 		member.prePrepareChan <- prePrepare
@@ -492,12 +523,14 @@ func (els *Elastico) handlePrePrepare(prePrepare *PrePrepare) error {
 
 func (els *Elastico) handlePrePreparePBFT(member *Member) {
 	//FIXME print stuff
-	log.Print("member", member.hashHexString,"of committee", member.committeeNo,
+	log.Print("member", member.hashHexString[0:8],"of committee", member.committeeNo,
 		"on node", els.index, "is on handle preprepare")
+	member.state = pbftStatePrePrepare
+	member.startPrePrepareChan <- true
 	block := <- member.prePrepareChan
-	member.state = pbftStatePrepare
 	member.committeeBlock = block.TrBlock
 	go els.handlePreparePBFT(member)
+	<- member.startPrepareChan
 	for coMember, node := range member.committeeMembers {
 		if err := els.SendTo(els.nodeList[node],
 			&Prepare{member.committeeBlock.HeaderHash, coMember}); err != nil {
@@ -524,15 +557,17 @@ func (els *Elastico) handlePrepare(prepare *Prepare) error {
 
 func (els *Elastico) handlePreparePBFT(member *Member) {
 	// FIXME print stuff
-	log.Print("member", member.hashHexString, "of committee", member.committeeNo,
-		"on node", els.index, "is on handle preprepare")
+	log.Print("member", member.hashHexString[0:8], "of committee", member.committeeNo,
+		"on node", els.index, "is on handle prepare")
+	member.state = pbftStatePrepare
+	member.startPrepareChan <- true
 	for {
 		<- member.prepareChan
 		member.prepMsgCount++
 		if member.prepMsgCount >= member.thresholdPBFT {
 			member.prepMsgCount = 0
-			member.state = pbftStateCommit
 			go els.handleCommitPBFT(member)
+			<- member.startCommitChan
 			for coMember, node := range member.committeeMembers {
 				if err := els.SendTo(els.nodeList[node],
 					&Commit{member.committeeBlock.HeaderHash, coMember}); err != nil {
@@ -561,22 +596,28 @@ func (els *Elastico) handleCommit(commit *Commit) error{
 
 func (els *Elastico) handleCommitPBFT(member *Member) {
 	// FIXME print stuff
-	log.Print("member", member.hashHexString, "of committee", member.committeeNo,
-		"on node", els.index, "is on handle commit for Block", member.committeeBlock.HeaderHash)
+	log.Print("member", member.hashHexString[0:8], "of committee", member.committeeNo,
+		"on node", els.index, "is on handle commit for Block", member.committeeBlock.HeaderHash[0:8])
+	member.state = pbftStateCommit
+	member.startCommitChan <- true
 	for {
 		<- member.commitChan
 		member.commitMsgCount++
 		if member.commitMsgCount >= member.thresholdPBFT {
 			member.commitMsgCount = 0
 			if member.isFinal{
+				log.Print("member", member.hashHexString[0:8], "of committee", member.committeeNo, "on node",
+				els.index, "is final member")
 				go els.finalPBFT(member)
 				<- member.startFinalPBFTChan
+				member.state = pbftStateTransit
 				for _, block := range member.tempBlockToFinalCommittee{
 					member.finalBlockChan <- block
 				}
 			} else {
 				els.broadcastToFinal(member)
 			}
+			return
 		}
 	}
 }
@@ -584,7 +625,7 @@ func (els *Elastico) handleCommitPBFT(member *Member) {
 
 func (els *Elastico) broadcastToFinal (member *Member) {
 	// FIXME print stuff
-	log.Print("member", member.hashHexString, "of committee", member.committeeNo,
+	log.Print("member", member.hashHexString[0:8], "of committee", member.committeeNo,
 		"on node", els.index, "broadcasts to final committee")
 	for finMember, node := range member.finalCommitteeMembers {
 		if err := els.SendTo(els.nodeList[node],
@@ -595,13 +636,14 @@ func (els *Elastico) broadcastToFinal (member *Member) {
 		}
 	}
 	member.state = pbftStateFinish
-	go els.checkFinish()
+	return
 }
 
 
 func (els *Elastico) handleBlockToFinalCommittee(block *BlockToFinalCommittee) {
+	// FIXME print stuff
 	member := els.members[block.DestMember]
-	if member.state != pbftStatePrePrepareFinal {
+	if member.state != pbftStateTransit {
 		member.tempBlockToFinalCommittee = append(member.tempBlockToFinalCommittee, block)
 		return
 	}
@@ -612,17 +654,20 @@ func (els *Elastico) handleBlockToFinalCommittee(block *BlockToFinalCommittee) {
 func (els *Elastico) finalPBFT(member *Member) {
 	// FIXME maybe fix this if we have other problems with races on other calls to pbft phases
 	member.startFinalPBFTChan <- true
+	// FIXME print stuff
+	log.Print("member", member.hashHexString[0:8], "of committee", member.committeeNo, "on node", els.index, "is busy with final pbft")
 	for {
 		block := <- member.finalBlockChan
 		member.finalConsensus[member.committeeNo] = member.committeeBlock.HeaderHash
-		member.finalConsensus[block.committeeNo] = block.HeaderHash
+		member.finalConsensus[block.CommitteeNo] = block.HeaderHash
+		log.Print("member", member.hashHexString[0:8], "has received", len(member.finalConsensus), "blocks")
 		if len(member.finalConsensus) == els.CommitteeCount {
 			if member.isLeader {
 				// FiXME print stuff
-				log.Print("member", member.hashHexString, "of committee", member.committeeNo,
+				log.Print("member", member.hashHexString[0:8], "of committee", member.committeeNo,
 				"on node", els.index, "has started final pbft")
-				member.state = pbftStatePrepareFinal
 				go els.handlePrepareFinalPBFT(member)
+				<- member.startPrepareFinalChan
 				for coMember, node := range member.committeeMembers{
 					if err := els.SendTo(els.nodeList[node],
 						&PrePrepareFinal{member.finalConsensus[0], coMember}); err != nil{
@@ -630,9 +675,10 @@ func (els *Elastico) finalPBFT(member *Member) {
 					}
 				}
 			} else {
-				member.state = pbftStatePrePrepareFinal
 				go els.handlePrePrepareFinalPBFT(member)
+				<- member.startPrePrepareFinalChan
 			}
+			return
 		}
 	}
 }
@@ -641,6 +687,7 @@ func (els *Elastico) handlePrePrepareFinal(prePrepareFinal *PrePrepareFinal){
 	// FIXME print stuff
 	member := els.members[prePrepareFinal.DestMember]
 	if member.state != pbftStatePrePrepareFinal {
+		// TODO delete print stuff
 		member.prePrepareFinalChan <- prePrepareFinal
 		return
 	}
@@ -650,23 +697,26 @@ func (els *Elastico) handlePrePrepareFinal(prePrepareFinal *PrePrepareFinal){
 
 func (els *Elastico) handlePrePrepareFinalPBFT(member *Member) {
 	// FIXME print stuff
-	log.Print("member", member.hashHexString, "of committee", member.committeeNo,
+	log.Print("member", member.hashHexString[0:8], "of committee", member.committeeNo,
 	"on node", els.index, "is on handle preprepare final")
+	member.state = pbftStatePrePrepareFinal
+	member.startPrePrepareFinalChan <- true
 	block := <- member.prePrepareFinalChan
 	if block == nil {
 		return
 	}
-	member.state = pbftStatePrepareFinal
 	go els.handlePrepareFinalPBFT(member)
-	for _, prepare := range member.tempPrepareFinalMsg {
-		member.prepareFinalChan <- prepare
-	}
+	<- member.startPrepareFinalChan
 	for coMember, node := range member.committeeMembers{
 		if err := els.SendTo(els.nodeList[node],
 			&PrepareFinal{block.HeaderHash, coMember}); err != nil{
 			log.Error(els.Name(), "can't send preprepare in final pbft", els.nodeList[node], err)
 		}
 	}
+	for _, prepare := range member.tempPrepareFinalMsg {
+		member.prepareFinalChan <- prepare
+	}
+	member.tempPrepareFinalMsg = nil
 }
 
 func (els *Elastico) handlePrepareFinal(prepareFinal *PrepareFinal) {
@@ -676,28 +726,31 @@ func (els *Elastico) handlePrepareFinal(prepareFinal *PrepareFinal) {
 		return
 	}
 	member.prepareFinalChan <- prepareFinal
+	return
 }
 
 func (els *Elastico) handlePrepareFinalPBFT(member *Member){
-	log.Print("member", member.hashHexString, "of committee", member.committeeNo,
+	log.Print("member", member.hashHexString[0:8], "of committee", member.committeeNo,
 		"on node", els.index, "is on handle prepare final")
+	member.state = pbftStatePrepareFinal
+	member.startPrepareFinalChan <- true
 	for {
 		block := <- member.prepareFinalChan
 		member.prepFinalMsgCount++
 		if member.prepFinalMsgCount >= member.thresholdPBFT {
 			member.prepFinalMsgCount = 0
-			member.state = pbftStateCommitFinal
 			go els.handleCommitFinalPBFT(member)
-			for _, commit := range member.tempCommitFinalMsg {
-				member.commitFinalChan <- commit
-			}
-			member.tempCommitFinalMsg = nil
+			<- member.startCommitFinalChan
 			for coMember, node := range member.committeeMembers {
 				if err := els.SendTo(els.nodeList[node],
 					&CommitFinal{block.HedearHash, coMember}); err != nil{
 					log.Error(els.Name(), "can't send to member in final commit", els.nodeList[node], err)
 				}
 			}
+			for _, commit := range member.tempCommitFinalMsg {
+				member.commitFinalChan <- commit
+			}
+			member.tempCommitFinalMsg = nil
 			return
 		}
 	}
@@ -707,42 +760,45 @@ func (els *Elastico) handleCommitFinal(commitFinal *CommitFinal) {
 	member := els.members[commitFinal.DestMember]
 	if member.state != pbftStateCommitFinal {
 		member.tempCommitFinalMsg = append(member.tempCommitFinalMsg, commitFinal)
+		return
 	}
 	member.commitFinalChan <- commitFinal
+	return
 }
 
 func (els *Elastico) handleCommitFinalPBFT(member *Member) {
-	log.Print("member", member.hashHexString, "of committee", member.committeeNo,
+	log.Print("member", member.hashHexString[0:8], "of committee", member.committeeNo,
 		"on node", els.index, "is on handle commit final")
+	member.state = pbftStateCommitFinal
+	member.startCommitFinalChan <- true
 	for {
 		<- member.commitFinalChan
+		log.Print("here")
 		member.commitFinalMsgCount++
 		if member.commitFinalMsgCount >= member.thresholdPBFT {
 			member.commitFinalMsgCount = 0
 			member.state = pbftStateFinish
-			go els.checkFinish()
+			els.broadcast(func(tn *onet.TreeNode){
+				if err := els.SendTo(tn, &Finish{}); err != nil {
+					log.Error("can't send finish message")
+				}
+			})
 			return
 		}
 	}
 }
 
-func (els *Elastico) checkFinish() {
-	els.fmc.Lock()
+
+func (els *Elastico) handleFinish() {
 	els.finishMsgCnt++
-	var pointlessMembers int = 0
-	for _, member := range els.members {
-		if member.state == pbftStateNotReady {
-			pointlessMembers++
+	if els.finishMsgCnt >= int(math.Ceil(float64(els.CommitteeSize)*2.0/3.0)){
+		els.SendTo(els.Tree().Root, &FinishRoot{})
+		if !els.IsRoot(){
+			els.Done()
 		}
 	}
-	nodeMembersCnt := len(els.members) - pointlessMembers
-	if els.finishMsgCnt == nodeMembersCnt {
-		els.SendTo(els.Tree().Root, &Finish{})
-		els.Done()
-		return
-	}
-	els.fmc.Unlock()
 }
+
 
 func (els *Elastico) addMember (hashHexString string) *Member{
 	member := new(Member)
@@ -755,15 +811,26 @@ func (els *Elastico) addMember (hashHexString string) *Member{
 	for i := 0; i < els.CommitteeCount; i++{
 		member.directory[i] = make(map[string]int)
 	}
+	member.committeeMembers = make(map[string]int)
+	member.committeeMembersCnt = make(map[string]int)
 	member.finalCommitteeMembers = make(map[string]int)
+	member.finalCommitteeMembersCnt = make(map[string]int)
+	member.finalConsensus = make(map[int]string)
 	member.memberToDirectoryChan = make(chan *NewMember, 1)
 	member.prePrepareChan = make(chan *PrePrepare, 1)
+	member.startPrePrepareChan = make(chan bool)
 	member.prepareChan = make(chan *Prepare, 1)
+	member.startPrepareChan = make(chan bool)
 	member.commitChan = make(chan *Commit, 1)
+	member.startCommitChan = make(chan bool)
 	member.prePrepareFinalChan = make(chan *PrePrepareFinal, 1)
+	member.startPrePrepareFinalChan = make(chan bool)
 	member.prepareFinalChan = make(chan *PrepareFinal, 1)
-	member.commitFinalChan = make(chan *CommitFinal, 1)
+	member.startPrepareFinalChan = make(chan bool)
+	member.commitFinalChan = make(chan *CommitFinal, els.CommitteeSize)
+	member.startCommitFinalChan = make(chan bool)
 	member.startFinalPBFTChan = make(chan bool)
+	member.finalBlockChan = make(chan *BlockToFinalCommittee, 1)
 	return member
 }
 

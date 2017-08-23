@@ -8,8 +8,7 @@ import (
 	"gopkg.in/dedis/onet.v1/log"
 	"github.com/dedis/cothority/byzcoin/blockchain/blkparser"
 	"github.com/dedis/cothority/messaging"
-	"github.com/dedis/onet/simul/monitor"
-	//"math/big"
+	"gopkg.in/dedis/onet.v1/simul/monitor"
 )
 
 
@@ -69,7 +68,7 @@ func (e *ElasticoSimulation) Run (config *onet.SimulationConfig) error {
 	dir := blockchain.GetBlockDir()
 	chain , _ := blkparser.NewBlockchain(dir, magicNum)
 	var rootNodeBlocks []*blockchain.TrBlock
-	for i := 0; i < e.CommitteeCount ; i++ {
+	for i := 0; i < config.Tree.Size() ; i++ {
 		var transactions []blkparser.Tx
 		blk, _ := chain.NextBlock()
 		for _ , tx := range blk.Txs {
