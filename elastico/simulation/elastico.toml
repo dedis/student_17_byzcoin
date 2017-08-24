@@ -4,4 +4,4 @@ Rounds = 5
 BF = 5
 
 Hosts, CommitteeCount, CommitteeSize, BlockSize, Target
-10, 2, 5, 5000, 2 
+12, 16, 15, 5000, 3
