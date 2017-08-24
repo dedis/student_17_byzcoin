@@ -48,6 +48,7 @@ type Elastico struct{
 	tempNewMemberMsg []NewMember
 	// all the members that this node has produced
 	members map[string]*Member
+	mmtx sync.Mutex
 	// the members in the directory committee
 	directoryCommittee map[string]int
 	dc sync.Mutex
@@ -418,7 +419,9 @@ func (els *Elastico) multicast(directoryMember *Member) error {
 
 
 func (els *Elastico) handleCommitteeMembers(committee *CommitteeMembers) error {
+	els.mmtx.Lock()
 	memberToUpdate := els.members[committee.DestMember]
+	els.mmtx.Unlock()
 	return els.checkForPBFT(memberToUpdate, committee)
 }
 
@@ -509,7 +512,7 @@ func (els *Elastico) startPBFT(member *Member) {
 
 func (els *Elastico) handlePrePrepare(prePrepare *PrePrepare) error {
 	member := els.members[prePrepare.DestMember]
-	log.Lvl2(member.committeeMembers, "for member", member.hashHexString[0:8], "on node", els.index)
+	log.Lvl3(member.committeeMembers, "for member", member.hashHexString[0:8], "on node", els.index)
 	if member.state != pbftStatePrePrepare {
 		// FIXME make this channel with buffer
 		member.prePrepareChan <- prePrepare
@@ -655,10 +658,9 @@ func (els *Elastico) finalPBFT(member *Member) {
 	// FIXME maybe fix this if we have other problems with races on other calls to pbft phases
 	member.startFinalPBFTChan <- true
 	member.state = pbftStateTransit
-	log.Lvl2("member", member.hashHexString[0:8], "of committee", member.committeeNo, "on node", els.index, "is busy with final pbft")
+	log.Lvl3("member", member.hashHexString[0:8], "of committee", member.committeeNo, "on node", els.index, "is busy with final pbft")
 	for {
 		block := <- member.finalBlockChan
-		log.Lvl2("member", member.hashHexString[0:8], "reaches here")
 		member.finalConsensus[member.committeeNo] = member.committeeBlock.HeaderHash
 		member.finalConsensus[block.CommitteeNo] = block.HeaderHash
 		log.Lvl2("member", member.hashHexString[0:8], "has received", len(member.finalConsensus), "blocks")
@@ -810,7 +812,9 @@ func (els *Elastico) addMember (hashHexString string) *Member{
 	member.state = pbftStateNotReady
 	member.committeeBlock = els.block
 	member.committeeNo = -1
+	els.mmtx.Lock()
 	els.members[hashHexString] = member
+	els.mmtx.Unlock()
 	member.directory = make(map[int](map[string]int))
 	for i := 0; i < els.CommitteeCount; i++{
 		member.directory[i] = make(map[string]int)

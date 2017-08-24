@@ -2,6 +2,7 @@ Servers = 5
 Simulation = "Elastico"
 Rounds = 5
 BF = 5
+RunWait = 300
 
 Hosts, CommitteeCount, CommitteeSize, BlockSize, Target
-12, 16, 15, 5000, 3
+16, 32, 30, 5000, 3
