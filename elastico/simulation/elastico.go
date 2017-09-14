@@ -1,14 +1,17 @@
 package main
 
 import (
-	"gopkg.in/dedis/onet.v1"
+	"gopkg.in/dedis/onet.v1/simul/monitor"
 	"github.com/dedis/student_17_byzcoin/elastico"
 	"github.com/BurntSushi/toml"
 	"github.com/dedis/cothority/byzcoin/blockchain"
 	"gopkg.in/dedis/onet.v1/log"
 	"github.com/dedis/cothority/byzcoin/blockchain/blkparser"
 	"github.com/dedis/cothority/messaging"
-	"gopkg.in/dedis/onet.v1/simul/monitor"
+	"gopkg.in/dedis/onet.v1"
+	"os"
+	"fmt"
+	"time"
 )
 
 
@@ -46,7 +49,8 @@ func NewElasticoSimulation(config string) (onet.Simulation, error){
 	return sim, nil
 }
 
-
+// in setup the tree and the roster get initialized. also by using EnsureBlockIsAvailable one .dat file
+// is fetched from pop.dedis.ch and saved in your build directory inside the simulation directory.
 func (e *ElasticoSimulation) Setup(dir string, hosts []string) (*onet.SimulationConfig, error) {
 	err := blockchain.EnsureBlockIsAvailable(dir)
 	if err != nil {
@@ -63,22 +67,21 @@ func (e *ElasticoSimulation) Setup(dir string, hosts []string) (*onet.Simulation
 
 
 func (e *ElasticoSimulation) Run (config *onet.SimulationConfig) error {
-
-
 	dir := blockchain.GetBlockDir()
 	chain , _ := blkparser.NewBlockchain(dir, magicNum)
-	var rootNodeBlocks []*blockchain.TrBlock
-	for i := 0; i < config.Tree.Size() ; i++ {
-		var transactions []blkparser.Tx
+	var rootNodeBlock *blockchain.TrBlock
+	var transactions []blkparser.Tx
+	for j := 0; j < e.BlockSize; j++{
 		blk, _ := chain.NextBlock()
 		for _ , tx := range blk.Txs {
 			transactions = append(transactions, *tx)
 		}
-		trList :=  blockchain.NewTransactionList(transactions, len(transactions))
-		header := blockchain.NewHeader(trList, "", "")
-		trblock := blockchain.NewTrBlock(trList, header)
-		rootNodeBlocks = append(rootNodeBlocks, trblock)
 	}
+	trList :=  blockchain.NewTransactionList(transactions, len(transactions))
+	header := blockchain.NewHeader(trList, "", "")
+	rootNodeBlock = blockchain.NewTrBlock(trList, header)
+
+
 
 	pi, err := config.Overlay.CreateProtocol("Broadcast", config.Tree, onet.NilServiceID)
 	if err != nil {
@@ -101,9 +104,31 @@ func (e *ElasticoSimulation) Run (config *onet.SimulationConfig) error {
 	onDoneCB := func(){
 		doneChan <- true
 	}
+	var pbftStartTime time.Time
+	measureStartTime := func (){
+		pbftStartTime = time.Now()
+	}
+	var pbftFinishTime time.Time
+	measureFinishTime := func (){
+		pbftFinishTime = time.Now()
+	}
 
 	log.Lvl1("Simulation can start!")
+	//FIXME this file is written on deterlab gateway. if you want to have it locally you have to deal with onet.
+	f, err := os.OpenFile("info.txt", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Error(err)
+	}
+	defer f.Close()
+	size := uint32(0)
+	for _, tx := range rootNodeBlock.Txs {
+		size += tx.Size
+	}
+	f.WriteString(fmt.Sprintf("%d ", e.CommitteeCount) +
+					fmt.Sprintf("%d ", e.CommitteeSize) +
+					fmt.Sprintf("%d\r", size))
 	for round := 0; round < e.Rounds; round++ {
+		// the simulation can start
 		log.Lvl1("starting round", round)
 		p, err := config.Overlay.CreateProtocol("Elastico", config.Tree, onet.NilServiceID)
 		if err != nil {
@@ -111,28 +136,22 @@ func (e *ElasticoSimulation) Run (config *onet.SimulationConfig) error {
 		}
 		els := p.(*elastico.Elastico)
 		els.OnDoneCB  = onDoneCB
+		els.MeasureStartTime = measureStartTime
+		els.MeasureFinishTime = measureFinishTime
 		els.CommitteeCount = e.CommitteeCount
 		els.CommitteeSize = e.CommitteeSize
 		els.TargetBit = e.Target
-		for _, trBlock := range rootNodeBlocks {
-			els.RootNodeBlocks = append(els.RootNodeBlocks, trBlock)
-		}
+		els.RootNodeBlock = rootNodeBlock
 		r := monitor.NewTimeMeasure("round-elastico")
 		if err := els.Start(); err != nil {
 			log.Error("Couldn't start elastico")
 			return err
 		}
 		<- doneChan
+		elapsed := pbftFinishTime.Sub(pbftStartTime).Seconds()
+		f.WriteString(fmt.Sprintf("%f\r", elapsed))
 		r.Record()
 		log.Lvl1("finished round", round)
 	}
 	return nil
 }
-
-
-
-
-
-
-
-

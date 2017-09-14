@@ -50,6 +50,33 @@ type StartProtocol struct{
 	Target         int
 }
 
+type readyChan struct {
+	*onet.TreeNode
+	Ready
+}
+
+type Ready struct {
+
+}
+
+type pbftStartChan struct {
+	*onet.TreeNode
+	PBFTStart
+}
+
+type PBFTStart struct {
+
+}
+
+type miningChan struct{
+	*onet.TreeNode
+	Mining
+}
+
+type Mining struct{
+
+}
+
 type NewMember struct {
 	HashHexString string
 	NodeIndex     int
